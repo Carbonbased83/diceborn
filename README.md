@@ -12,7 +12,7 @@ Open `index.html` in a browser, or serve the folder:
 python3 -m http.server 43123
 ```
 
-Then visit `http://127.0.0.1:43123`. Serving over HTTP lets the service worker cache the game for offline play (`diceborn-v1`). Progress is stored in `localStorage` under `diceborn.v1`.
+Then visit `http://127.0.0.1:43123`. Serving over HTTP lets the service worker cache the game for offline play (`diceborn-v2`). Progress stays in `localStorage` under `diceborn.v1`.
 
 ## How a run works
 

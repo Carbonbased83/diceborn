@@ -1,4 +1,4 @@
-const CACHE = 'diceborn-v1';
+const CACHE = 'diceborn-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,35 @@ const ASSETS = [
   './icons/icon-512.png',
   './fonts/nunito-700.woff2',
   './fonts/nunito-800.woff2',
+  './art/camp.jpg',
+  './art/battle.jpg',
+  './art/board.jpg',
+  './art/fenn.png',
+  './art/bramble.png',
+  './art/luma.png',
+  './art/cobble.png',
+  './art/slime.png',
+  './art/bat.png',
+  './art/goblin.png',
+  './art/knight.png',
+  './art/dragon.png',
+  './art/wagon.png',
+  './art/chest.png',
+  './art/tree.png',
+  './art/tile-start.png',
+  './art/tile-fight.png',
+  './art/tile-elite.png',
+  './art/tile-buff.png',
+  './art/tile-hazard.png',
+  './art/tile-shop.png',
+  './art/tile-mini.png',
+  './art/tile-boss.png',
+  './art/die-1.png',
+  './art/die-2.png',
+  './art/die-3.png',
+  './art/die-4.png',
+  './art/die-5.png',
+  './art/die-6.png',
 ];
 
 self.addEventListener('install', (event) => {

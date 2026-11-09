@@ -2,7 +2,7 @@
   'use strict';
 
   const SAVE_KEY = 'diceborn.v1';
-  const SLOTS = ['weapon', 'armor', 'trinket'];
+  const SLOTS = ['weapon', 'helm', 'armor', 'boots', 'ring', 'charm'];
   const RARITIES = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
   const RARITY_MULT = { common: 1, uncommon: 1.45, rare: 1.95, epic: 2.6, legendary: 3.4 };
   const SET_IDS = ['campfire', 'nightglass', 'briar', 'goldleaf'];
@@ -146,11 +146,12 @@
   };
 
   const GEAR_NAMES = {
-    campfire: { weapon: 'Campfire Diceblade', armor: 'Campfire Cloak', trinket: 'Campfire Ember' },
-    nightglass: { weapon: 'Nightglass Fang', armor: 'Nightglass Wrap', trinket: 'Nightglass Eye' },
-    briar: { weapon: 'Briar Knife', armor: 'Briar Hide', trinket: 'Briar Burr' },
-    goldleaf: { weapon: 'Goldleaf Scepter', armor: 'Goldleaf Coat', trinket: 'Goldleaf Bell' },
+    campfire: { weapon: 'Campfire Diceblade', helm: 'Campfire Cap', armor: 'Campfire Cloak', boots: 'Campfire Boots', ring: 'Campfire Band', charm: 'Campfire Ember' },
+    nightglass: { weapon: 'Nightglass Fang', helm: 'Nightglass Hood', armor: 'Nightglass Wrap', boots: 'Nightglass Treads', ring: 'Nightglass Loop', charm: 'Nightglass Eye' },
+    briar: { weapon: 'Briar Knife', helm: 'Briar Cap', armor: 'Briar Hide', boots: 'Briar Boots', ring: 'Briar Knot', charm: 'Briar Burr' },
+    goldleaf: { weapon: 'Goldleaf Scepter', helm: 'Goldleaf Circlet', armor: 'Goldleaf Coat', boots: 'Goldleaf Shoes', ring: 'Goldleaf Ring', charm: 'Goldleaf Bell' },
   };
+  const SLOT_LABEL = { weapon: 'Weapon', helm: 'Helm', armor: 'Armor', boots: 'Boots', ring: 'Ring', charm: 'Charm' };
   const SET_INFO = {
     campfire: { name: 'Campfire', two: 'Heal 6 after each fight', three: '+18 HP and +3 defense' },
     nightglass: { name: 'Nightglass', two: '+5% crit', three: '+6% crit and harder crits' },
@@ -193,7 +194,13 @@
     speed: 1,
     pick: null,
     fuse: [],
-    dieFace: 1,
+    dieFace: 5,
+    partyTab: 'heroes',
+    mountView: 'deploy',
+    forgeTab: 'merge',
+    focusHero: null,
+    focusMount: null,
+    treeNode: 'hp',
     raf: 0,
     lastTick: 0,
   };
@@ -311,7 +318,14 @@
       highestStage: 1, stage: 1, wins: 0, runs: 0,
       hero: 'fenn', pet: null, mount: null,
       petsUnlocked: [], mountsUnlocked: [],
-      gear: [], equipped: { weapon: null, armor: null, trinket: null },
+      gear: [], equipped: { weapon: null, helm: null, armor: null, boots: null, ring: null, charm: null },
+      bestRolls: 0,
+      mountSlots: [null, null, null],
+      mountLevel: {},
+      sentinelLevel: { pebble: 0, amber: 0, moss: 0 },
+      sentinelDeploy: [null, null, null],
+      heroRank: {},
+      skin: {},
       chests: { wood: 1, iron: 0, gilt: 0 },
       daily: { last: null, streak: 0, total: 0 },
       muted: false, seenHelp: false, nextId: 1, run: null,
@@ -325,7 +339,8 @@
     const save = Object.assign(fresh, raw);
     save.training = Object.assign(defaultSave().training, raw.training || {});
     save.talents = Object.assign(defaultSave().talents, raw.talents || {});
-    save.equipped = Object.assign({ weapon: null, armor: null, trinket: null }, raw.equipped || {});
+    save.equipped = Object.assign({ weapon: null, helm: null, armor: null, boots: null, ring: null, charm: null }, raw.equipped || {});
+    if (save.equipped.trinket && !save.equipped.charm) save.equipped.charm = save.equipped.trinket;
     save.chests = Object.assign({ wood: 0, iron: 0, gilt: 0 }, raw.chests || {});
     save.daily = Object.assign({ last: null, streak: 0, total: 0 }, raw.daily || {});
     save.gear = Array.isArray(raw.gear) ? raw.gear : [];
@@ -341,7 +356,19 @@
     if (!HEROES[save.hero]) save.hero = 'fenn';
     if (save.pet && !PETS[save.pet]) save.pet = null;
     if (save.mount && !MOUNTS[save.mount]) save.mount = null;
+    save.bestRolls = Math.max(0, save.bestRolls | 0);
+    save.mountSlots = Array.isArray(raw.mountSlots) ? raw.mountSlots.slice(0, 3) : [save.mount || null, null, null];
+    while (save.mountSlots.length < 3) save.mountSlots.push(null);
+    if (save.mount && save.mountSlots.every((id) => !id)) save.mountSlots[0] = save.mount;
+    save.mount = save.mountSlots[0] || null;
+    save.mountLevel = Object.assign({}, raw.mountLevel || {});
+    save.sentinelLevel = Object.assign({ pebble: 0, amber: 0, moss: 0 }, raw.sentinelLevel || {});
+    save.sentinelDeploy = Array.isArray(raw.sentinelDeploy) ? raw.sentinelDeploy.slice(0, 3) : [null, null, null];
+    while (save.sentinelDeploy.length < 3) save.sentinelDeploy.push(null);
+    save.heroRank = Object.assign({}, raw.heroRank || {});
+    save.skin = Object.assign({}, raw.skin || {});
     save.gear.forEach((gear) => {
+      if (gear.slot === 'trinket') gear.slot = 'charm';
       const n = parseInt(String(gear.id).replace(/\D/g, ''), 10);
       if (n >= save.nextId) save.nextId = n + 1;
     });
@@ -451,27 +478,95 @@
     bonus.counts = counts;
     return bonus;
   }
+  const SENTINELS = {
+    pebble: { name: 'Pebble Warden', blurb: 'A round stone guardian. More health for the whole camp.', stat: 'hp', per: 10, met: () => true, text: 'Awake from the first morning.' },
+    amber: { name: 'Amber Watch', blurb: 'A lantern statue. Sharper strikes.', stat: 'atk', per: 2, met: (s) => s.highestStage >= 3, text: 'Reach stage 3.' },
+    moss: { name: 'Moss Bulwark', blurb: 'A garden golem. A sturdier hide.', stat: 'def', per: 1, met: (s) => s.highestStage >= 5, text: 'Reach stage 5.' },
+  };
+  const SENTINEL_IDS = Object.keys(SENTINELS);
+  const SKINS = {
+    fenn: [
+      { id: 'road', name: 'Road Scarf', filter: '', met: () => true },
+      { id: 'moon', name: 'Moonlit', filter: 'hue-rotate(200deg) saturate(1.2)', met: (s) => s.highestStage >= 4 },
+      { id: 'leaf', name: 'Leafcloak', filter: 'hue-rotate(78deg)', met: (s) => s.wins >= 2 },
+    ],
+    bramble: [
+      { id: 'road', name: 'Patch Cloak', filter: '', met: () => true },
+      { id: 'dusk', name: 'Dusk Pelt', filter: 'hue-rotate(250deg)', met: (s) => s.wins >= 4 },
+    ],
+    luma: [
+      { id: 'road', name: 'Lantern', filter: '', met: () => true },
+      { id: 'rose', name: 'Rose Lamp', filter: 'hue-rotate(300deg)', met: (s) => s.highestStage >= 8 },
+    ],
+    cobble: [
+      { id: 'road', name: 'River Stone', filter: '', met: () => true },
+      { id: 'fern', name: 'Fern Coat', filter: 'hue-rotate(90deg)', met: (s) => s.wins >= 8 },
+    ],
+  };
+  function sentinelReady(id) { return !!(SENTINELS[id] && SENTINELS[id].met(State.save)); }
+  function sentinelLv(id) { return Math.max(0, (State.save.sentinelLevel && State.save.sentinelLevel[id]) || 0); }
+  function mountLv(id) { return Math.max(1, (State.save.mountLevel && State.save.mountLevel[id]) || 1); }
+  function deployedMountIds(save) {
+    const slots = save.mountSlots && save.mountSlots.length ? save.mountSlots : [save.mount || null, null, null];
+    return [0, 1, 2].map((i) => slots[i] || null);
+  }
+  function skinFilter(heroId) {
+    const list = SKINS[heroId] || [];
+    const chosen = (State.save.skin && State.save.skin[heroId]) || 'road';
+    const skin = list.find((item) => item.id === chosen) || list[0];
+    return skin && skin.filter ? skin.filter : '';
+  }
+  function heroProgress(id) {
+    const save = State.save;
+    if (id === 'fenn') return heroUnlocked(id) ? 'Ready' : '0/1';
+    if (id === 'bramble') return heroUnlocked(id) ? 'Ready' : Math.min(save.highestStage, 3) + '/3 stages';
+    if (id === 'luma') return heroUnlocked(id) ? 'Ready' : Math.min(save.highestStage, 6) + '/6 stages';
+    return heroUnlocked(id) ? 'Ready' : Math.min(save.wins, 6) + '/6 wins';
+  }
   function profile(save, run) {
     const heroId = run && run.heroId ? run.heroId : save.hero;
     const hero = HEROES[heroId] || HEROES.fenn;
     const petId = run ? run.petId : save.pet;
-    const mountId = run ? run.mountId : save.mount;
     const pet = petId && PETS[petId] ? PETS[petId] : null;
-    const mount = mountId && MOUNTS[mountId] ? MOUNTS[mountId] : null;
     const mods = Object.assign(blankMods(), run ? run.mods : {});
     const gear = gearStats(save);
     const set = setBonus(save);
     const tr = save.training;
     const tl = save.talents;
-    const mm = mount && mount.mods ? mount.mods : {};
-    const maxHp = Math.max(20, hero.base.hp + tr.hp * 14 + (gear.hp || 0) + (set.hp || 0) + (mm.hp || 0) + (mods.hp || 0));
+    const mm = blankMods();
+    deployedMountIds(save).forEach((id) => {
+      const mount = id && MOUNTS[id];
+      if (!mount || !mount.mods) return;
+      const lv = Math.max(1, (save.mountLevel && save.mountLevel[id]) || 1);
+      Object.keys(mount.mods).forEach((key) => {
+        const flat = key === 'hp' || key === 'atk' || key === 'def' || key === 'spd' || key === 'healOnKill';
+        mm[key] = (mm[key] || 0) + mount.mods[key] * (flat ? lv : 1);
+      });
+    });
+    const sent = { hp: 0, atk: 0, def: 0 };
+    (save.sentinelDeploy || []).forEach((id) => {
+      const def = id && SENTINELS[id];
+      if (!def || !def.met(save)) return;
+      const lv = Math.max(1, (save.sentinelLevel && save.sentinelLevel[id]) || 1);
+      sent[def.stat] += def.per * lv;
+    });
+    const rank = (save.heroRank && save.heroRank[heroId]) || 0;
+    let synCrit = 0;
+    let synUlt = 0;
+    let synDef = 0;
+    let synHp = 0;
+    if (heroId === 'fenn' && petId === 'nib') synCrit += 0.04;
+    if (heroId === 'bramble' && (save.sentinelDeploy || []).indexOf('pebble') >= 0) synDef += 2;
+    if (heroId === 'luma' && petId === 'wisp') synUlt += 0.08;
+    if (heroId === 'cobble' && deployedMountIds(save).indexOf('mossram') >= 0) synHp += 12;
+    const maxHp = Math.max(20, hero.base.hp + tr.hp * 14 + (gear.hp || 0) + (set.hp || 0) + (mm.hp || 0) + (mods.hp || 0) + sent.hp + rank * 8 + synHp);
     return {
       heroId, name: hero.name, ultName: hero.ult,
       maxHp,
-      atk: Math.max(1, hero.base.atk + tr.atk * 3 + (gear.atk || 0) + (set.atk || 0) + (mm.atk || 0) + (mods.atk || 0)),
-      def: Math.max(0, hero.base.def + tr.def * 2 + (gear.def || 0) + (set.def || 0) + (mm.def || 0) + (mods.def || 0)),
+      atk: Math.max(1, hero.base.atk + tr.atk * 3 + (gear.atk || 0) + (set.atk || 0) + (mm.atk || 0) + (mods.atk || 0) + sent.atk + rank),
+      def: Math.max(0, hero.base.def + tr.def * 2 + (gear.def || 0) + (set.def || 0) + (mm.def || 0) + (mods.def || 0) + sent.def + synDef),
       spd: Math.max(1, hero.base.spd + tl.spd * 4 + (gear.spd || 0) + (mm.spd || 0) + (mods.spd || 0) + (pet ? pet.spd || 0 : 0)),
-      crit: clamp(hero.base.crit + tr.crit * 0.02 + (gear.crit || 0) + (set.crit || 0) + (mods.crit || 0), 0, 0.7),
+      crit: clamp(hero.base.crit + tr.crit * 0.02 + (gear.crit || 0) + (set.crit || 0) + (mods.crit || 0) + synCrit, 0, 0.7),
       cdmg: 1.65 + (gear.cdmg || 0) + (set.cdmg || 0) + (mods.cdmg || 0),
       onHit: (gear.onHit || 0) + (mods.onHit || 0),
       thorns: (hero.thorns || 0) + (gear.thorns || 0) + (set.thorns || 0) + (mods.thorns || 0),
@@ -479,7 +574,7 @@
       ls: (gear.ls || 0) + (mm.ls || 0) + (mods.ls || 0),
       lifeFlat: mods.lifeFlat || 0,
       healOnKill: tl.mend * 4 + (gear.healOnKill || 0) + (set.healOnKill || 0) + (mm.healOnKill || 0) + (mods.healOnKill || 0),
-      ultBonus: tl.ult * 0.08 + (gear.ult || 0) + (mods.ultBonus || 0),
+      ultBonus: tl.ult * 0.08 + (gear.ult || 0) + (mods.ultBonus || 0) + synUlt,
       shield: tl.shield * 6 + (gear.shield || 0) + (mods.shield || 0),
       gold: tl.gold * 0.06 + (gear.gold || 0) + (set.gold || 0) + (mm.gold || 0) + (mods.gold || 0),
       mini: tl.mini * 0.08,
@@ -512,10 +607,19 @@
     if (slot === 'weapon') {
       stats.atk = Math.max(1, Math.round((2.1 + ri * 0.45) * mult));
       if (ri >= 2) stats.crit = Math.round((0.015 + ri * 0.008) * 1000) / 1000;
+    } else if (slot === 'helm') {
+      stats.hp = Math.round((6 + ri * 2) * mult);
+      stats.def = 1 + Math.floor(ri / 2);
     } else if (slot === 'armor') {
       stats.hp = Math.round((10 + ri * 3) * mult);
       stats.def = 1 + ri + Math.floor((Math.max(1, ilevel) - 1) / 4);
       if (setId === 'briar') stats.thorns = 1 + ri;
+    } else if (slot === 'boots') {
+      stats.spd = 2 + ri * 2;
+      if (ri >= 1) stats.def = 1;
+    } else if (slot === 'ring') {
+      stats.crit = Math.round((0.015 + ri * 0.01) * 1000) / 1000;
+      if (setId === 'goldleaf') stats.gold = Math.round((0.04 + ri * 0.012) * 1000) / 1000;
     } else if (setId === 'nightglass') {
       stats.crit = Math.round((0.02 + ri * 0.012) * 1000) / 1000;
     } else if (setId === 'goldleaf') {
@@ -527,11 +631,12 @@
     } else {
       stats.thorns = 2 + ri;
     }
-    if (ri >= 3 && slot === 'trinket') stats.ult = 0.06;
+    if (ri >= 3 && (slot === 'charm' || slot === 'ring')) stats.ult = 0.06;
+    const names = GEAR_NAMES[setId] || GEAR_NAMES.campfire;
     return {
       id: 'g' + (State.save.nextId++),
       slot, rarity, set: setId, ilevel: Math.max(1, ilevel),
-      name: GEAR_NAMES[setId][slot],
+      name: names[slot] || 'Odd Relic',
       stats,
     };
   }
@@ -760,9 +865,10 @@
       relics: [],
       boons: [],
       foundGold: 0,
+      rolls: 0,
       heroId: State.save.hero,
       petId: State.save.pet,
-      mountId: State.save.mount,
+      mountId: (State.save.mountSlots && State.save.mountSlots[0]) || State.save.mount,
       wound: 0,
       rollCap: 0,
       stepsLeft: 0,
@@ -780,6 +886,7 @@
     run.relics = Array.isArray(run.relics) ? run.relics : [];
     run.boons = Array.isArray(run.boons) ? run.boons : [];
     run.foundGold = run.foundGold | 0;
+    run.rolls = run.rolls | 0;
     run.wound = run.wound || 0;
     run.rollCap = run.rollCap || 0;
     run.stepsLeft = run.stepsLeft | 0;
@@ -885,7 +992,9 @@
       hero.hp = Math.min(hero.maxHp, hero.hp + heal);
       floater('+' + heal, 30, 58, 'heal');
     }
-    floater((kind === 'crit' ? 'CRIT ' : kind === 'ult' ? '' : '') + amount, kind === 'ult' ? 74 : 78, kind === 'ult' ? 48 : 56, kind);
+    floater((kind === 'crit' ? 'CRIT ' : '') + amount, 76, 62, kind === 'ult' ? 'ult' : kind === 'crit' ? 'crit' : 'hit');
+    pulseClass('fx-slash', 'go');
+    pulseClass('fx-hit', 'go');
     pulseClass('actor-foe', 'flash');
     const battle = State.battle;
     if (kind === 'ult') battle.log = hero.ultName + ' deals ' + amount + '.';
@@ -913,6 +1022,7 @@
       let amount = hurt(hero.atk + (hero.onHit || 0), foe.def);
       if (crit) amount = Math.round(amount * hero.cdmg);
       if (foe.boss) amount = Math.round(amount * (1 + (hero.bossDmg || 0)));
+      battle.swings = (battle.swings || 0) + 1;
       dealToFoe(hero, foe, amount, crit ? 'crit' : 'hit');
       pulseClass('actor-hero', 'lunging');
       if (crit) shake();
@@ -1042,6 +1152,7 @@
       if (Math.random() < 0.22) lines.push(grantRandomCompanion());
       State.save.wins += 1;
       State.save.runs += 1;
+      State.save.bestRolls = Math.max(State.save.bestRolls || 0, run.rolls || 0);
       State.save.highestStage = Math.max(State.save.highestStage, run.stage + 1);
       const unlocks = diffUnlocks(before);
       autoEquipNew(before);
@@ -1057,6 +1168,8 @@
       [523, 659, 784].forEach((freq, i) => setTimeout(() => blip(freq, 0.12, 'triangle', 0.05), i * 90));
       return;
     }
+    run.pendingElite = !!foe.elite;
+    run.freeReroll = true;
     run.pendingCards = draftCards(!!foe.elite);
     run.banner = lines.join(' · ');
     State.pick = null;
@@ -1070,6 +1183,7 @@
     const run = State.run;
     if (!run) return;
     const before = snapshotUnlocks();
+    State.save.bestRolls = Math.max(State.save.bestRolls || 0, run.rolls || 0);
     State.save.runs += 1;
     const unlocks = diffUnlocks(before);
     autoEquipNew(before);
@@ -1097,7 +1211,7 @@
     return '<svg viewBox="0 0 80 80" aria-hidden="true">' + body + '</svg>';
   }
   const SPRITES = {
-    fenn: svg('<ellipse cx="18" cy="60" rx="11" ry="7" fill="#f29a3a" transform="rotate(-28 18 60)"/><ellipse cx="11" cy="54" rx="5" ry="4" fill="#fff1dc" transform="rotate(-28 11 54)"/><path d="M24 34 L17 8 L38 28Z" fill="#f29a3a"/><path d="M58 34 L65 8 L44 28Z" fill="#f29a3a"/><path d="M26 30 L21 12 L36 28Z" fill="#ffb6c8"/><path d="M56 30 L61 12 L46 28Z" fill="#ffb6c8"/><ellipse cx="46" cy="64" rx="15" ry="11" fill="#f29a3a"/><ellipse cx="46" cy="68" rx="8" ry="6" fill="#ffe3c2"/><circle cx="46" cy="40" r="16" fill="#f29a3a"/><ellipse cx="46" cy="46" rx="9" ry="7" fill="#ffe3c2"/><circle cx="40" cy="38" r="2.2" fill="#2a1608"/><circle cx="52" cy="38" r="2.2" fill="#2a1608"/><circle cx="40.8" cy="37.2" r=".7" fill="#fff"/><circle cx="52.8" cy="37.2" r=".7" fill="#fff"/><ellipse cx="46" cy="45.5" rx="2" ry="1.5" fill="#2a1608"/><path d="M34 50h22l-3 7H37z" fill="#d24b4b"/>'),
+    fenn: '<svg viewBox="0 0 80 120" aria-hidden="true"><ellipse cx="16" cy="86" rx="14" ry="8" fill="#f29a3a" stroke="#24160c" stroke-width="2.4" transform="rotate(-32 16 86)"/><ellipse cx="6" cy="78" rx="6" ry="5" fill="#fff4e4" stroke="#24160c" stroke-width="2" transform="rotate(-32 6 78)"/><rect x="30" y="96" width="9" height="16" rx="4" fill="#e07a28" stroke="#24160c" stroke-width="2.2"/><rect x="46" y="96" width="9" height="16" rx="4" fill="#e07a28" stroke="#24160c" stroke-width="2.2"/><ellipse cx="44" cy="84" rx="18" ry="16" fill="#f29a3a" stroke="#24160c" stroke-width="2.6"/><ellipse cx="44" cy="90" rx="10" ry="8" fill="#ffe6c8" stroke="#24160c" stroke-width="2"/><path d="M30 70h28l-4 12H34z" fill="#e23b4a" stroke="#24160c" stroke-width="2.2"/><path d="M28 52 L16 14 L40 42Z" fill="#f29a3a" stroke="#24160c" stroke-width="2.4"/><path d="M60 52 L72 14 L48 42Z" fill="#f29a3a" stroke="#24160c" stroke-width="2.4"/><path d="M30 46 L22 20 L40 40Z" fill="#ffb4c8"/><path d="M58 46 L66 20 L48 40Z" fill="#ffb4c8"/><circle cx="44" cy="50" r="18" fill="#f29a3a" stroke="#24160c" stroke-width="2.6"/><ellipse cx="44" cy="56" rx="10" ry="8" fill="#ffe6c8" stroke="#24160c" stroke-width="2"/><circle cx="37" cy="48" r="2.4" fill="#24160c"/><circle cx="51" cy="48" r="2.4" fill="#24160c"/><circle cx="37.8" cy="47.2" r=".8" fill="#fff"/><circle cx="51.8" cy="47.2" r=".8" fill="#fff"/><ellipse cx="44" cy="55" rx="2.2" ry="1.6" fill="#24160c"/><rect x="62" y="74" width="5" height="22" rx="1" fill="#e8eef6" stroke="#24160c" stroke-width="2"/><rect x="58" y="72" width="13" height="5" rx="1" fill="#c9843a" stroke="#24160c" stroke-width="2"/></svg>',
     bramble: svg('<ellipse cx="40" cy="58" rx="22" ry="16" fill="#8d8a96"/><ellipse cx="40" cy="62" rx="12" ry="8" fill="#f4f0e6"/><path d="M18 48 Q8 30 22 24 Q24 40 28 46Z" fill="#6f6a78"/><path d="M62 48 Q72 30 58 24 Q56 40 52 46Z" fill="#6f6a78"/><circle cx="40" cy="36" r="16" fill="#9b97a3"/><path d="M40 22 l4 16 h-8z" fill="#f7f4ea"/><circle cx="34" cy="36" r="2.2" fill="#2a1608"/><circle cx="46" cy="36" r="2.2" fill="#2a1608"/><ellipse cx="40" cy="42" rx="3" ry="2" fill="#2a1608"/><path d="M24 48 h32 l-4 14 H30z" fill="#8a3a3a"/><rect x="18" y="46" width="10" height="14" rx="2" fill="#c0c6d0"/>'),
     luma: svg('<ellipse cx="18" cy="40" rx="16" ry="22" fill="#c9b0ff"/><ellipse cx="62" cy="40" rx="16" ry="22" fill="#c9b0ff"/><ellipse cx="18" cy="40" rx="8" ry="12" fill="#ffe29a"/><ellipse cx="62" cy="40" rx="8" ry="12" fill="#ffe29a"/><circle cx="40" cy="42" r="14" fill="#f3e6ff"/><circle cx="35" cy="42" r="2" fill="#2a1608"/><circle cx="45" cy="42" r="2" fill="#2a1608"/><path d="M36 48 q4 4 8 0" stroke="#2a1608" fill="none" stroke-width="1.5"/><circle cx="40" cy="64" r="8" fill="#f0c14a"/><rect x="37" y="54" width="6" height="8" fill="#c8892a"/>'),
     cobble: svg('<ellipse cx="40" cy="66" rx="18" ry="8" fill="#8d97a3"/><ellipse cx="28" cy="58" rx="12" ry="10" fill="#aeb6c0"/><ellipse cx="50" cy="56" rx="14" ry="12" fill="#98a2ae"/><circle cx="40" cy="40" r="16" fill="#c5ccd4"/><circle cx="34" cy="40" r="2.2" fill="#2a1608"/><circle cx="46" cy="40" r="2.2" fill="#2a1608"/><path d="M34 46 q6 5 12 0" stroke="#2a1608" fill="none" stroke-width="1.6"/><ellipse cx="54" cy="34" rx="6" ry="4" fill="#7dcea0"/>'),
@@ -1115,7 +1229,22 @@
     cindermare: svg('<ellipse cx="38" cy="56" rx="20" ry="12" fill="#d4533c"/><circle cx="58" cy="40" r="12" fill="#e36a48"/><path d="M50 30 q8-16 14-4 q-8 2-14 4z" fill="#f0c14a"/><circle cx="62" cy="38" r="1.8" fill="#2a1608"/><path d="M18 58 l8 10 M30 62 l4 10" stroke="#a33b2a" stroke-width="3"/>'),
     coinback: svg('<ellipse cx="40" cy="58" rx="16" ry="8" fill="#7dcea0"/><circle cx="40" cy="42" r="16" fill="#f0c14a"/><circle cx="40" cy="42" r="10" fill="#c8892a"/><circle cx="28" cy="48" r="6" fill="#8ee0a8"/><circle cx="26" cy="47" r="1.4" fill="#1d3a1c"/>'),
   };
-  function sprite(id) { return SPRITES[id] || SPRITES.fenn; }
+  const ART = {
+    fenn: 'art/fenn.png', bramble: 'art/bramble.png', luma: 'art/luma.png', cobble: 'art/cobble.png',
+    slime: 'art/slime.png', bat: 'art/bat.png', goblin: 'art/goblin.png', knight: 'art/knight.png', dragon: 'art/dragon.png',
+  };
+  function sprite(id) {
+    if (ART[id]) return '<span class="chibi"><img src="' + ART[id] + '" alt="" draggable="false"></span>';
+    return '<span class="chibi">' + (SPRITES[id] || SPRITES.fenn) + '</span>';
+  }
+  const FACE_TURN = {
+    1: 'rotateX(0deg) rotateY(0deg)',
+    2: 'rotateY(-90deg)',
+    3: 'rotateX(-90deg)',
+    4: 'rotateX(90deg)',
+    5: 'rotateY(90deg)',
+    6: 'rotateY(180deg)',
+  };
   function icon(path) {
     return '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
   }
@@ -1139,7 +1268,66 @@
     bag: icon('<path d="M8 9 H16 L18 20 H6 Z" fill="#fff"/><path d="M10 9 Q12 4 14 9" stroke="#fff" fill="none"/>'),
     flame: icon('<path d="M12 2 Q16 8 14 12 Q20 12 16 22 Q8 20 8 13 Q12 12 10 8 Z" fill="#f0c14a"/>'),
     fire: icon('<path d="M12 4 Q16 10 13 14 Q18 16 12 22 Q6 16 10 12 Q8 8 12 4 Z" fill="#f0c14a"/>'),
+    shield: icon('<path d="M12 3 L20 7 V13 Q12 21 4 13 V7 Z" fill="#8ecbff" stroke="#24160c" stroke-width="1.4"/>'),
+    paw: icon('<circle cx="8" cy="8" r="2.2" fill="#f29a3a"/><circle cx="16" cy="8" r="2.2" fill="#f29a3a"/><circle cx="6" cy="13" r="2" fill="#f29a3a"/><circle cx="18" cy="13" r="2" fill="#f29a3a"/><ellipse cx="12" cy="16" rx="4" ry="3.2" fill="#f29a3a"/>'),
+    armor: icon('<path d="M6 6 H18 V12 Q12 20 6 12 Z" fill="#d5dbe6" stroke="#24160c" stroke-width="1.4"/>'),
+    boot: icon('<path d="M8 4 H14 V14 H18 V18 H6 V12 H8 Z" fill="#c9843a" stroke="#24160c" stroke-width="1.2"/>'),
   };
+  function skillBadge(card) {
+    const m = (card && card.mods) || {};
+    let bg = '#ffb15a';
+    let glyph = '<path d="M32 10 L38 28 H54 L41 38 L46 56 L32 46 L18 56 L23 38 L10 28 H26 Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    if (m.hp || m.healOnKill || m.lifeFlat || m.ls) {
+      bg = '#ff5d73';
+      glyph = '<path d="M32 50 C12 34 14 16 26 16 C32 16 32 22 32 22 C32 22 32 16 38 16 C50 16 52 34 32 50Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    } else if (m.def || m.shield) {
+      bg = '#5aa7ff';
+      glyph = '<path d="M32 8 L52 16 V32 Q32 56 12 32 V16 Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    } else if (m.spd) {
+      bg = '#7dce8a';
+      glyph = '<path d="M14 40 L34 12 L30 32 H50 L28 54 L34 36 Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    } else if (m.crit || m.cdmg) {
+      bg = '#ffe56a';
+      glyph = '<circle cx="32" cy="32" r="14" fill="#fff" stroke="#24160c" stroke-width="2"/><path d="M32 8 V18 M32 46 V56 M8 32 H18 M46 32 H56" stroke="#24160c" stroke-width="3"/>';
+    } else if (m.ultBonus) {
+      bg = '#ff7a3a';
+      glyph = '<path d="M32 6 C40 20 48 22 44 36 C52 34 50 50 32 58 C14 50 12 34 20 36 C16 22 24 20 32 6Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    } else if (m.thorns || m.thornsPct) {
+      bg = '#7a4ad0';
+      glyph = '<path d="M32 8 L38 28 L32 24 L26 28 Z M32 24 V54" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    } else if (m.atk || m.onHit) {
+      bg = '#f29a3a';
+      glyph = '<path d="M18 46 L40 12 L36 34 H50 L26 54 L32 36 Z" fill="#fff" stroke="#24160c" stroke-width="2"/>';
+    }
+    return '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="' + bg + '" stroke="#24160c" stroke-width="3"/>' + glyph + '</svg>';
+  }
+  function boonIcon(card) {
+    const m = (card && card.mods) || {};
+    if (m.ultBonus) return ICONS.flame;
+    if (m.ls || m.lifeFlat || m.healOnKill) return ICONS.heart;
+    if (m.thorns || m.thornsPct) return ICONS.thorn;
+    if (m.shield) return ICONS.shield;
+    if (m.crit || m.cdmg) return ICONS.star;
+    if (m.spd) return ICONS.paw;
+    if (m.def) return ICONS.armor;
+    if (m.hp) return ICONS.heart;
+    return ICONS.sword;
+  }
+  function slotIcon(slot) {
+    if (slot === 'weapon') return ICONS.sword;
+    if (slot === 'helm') return ICONS.crown;
+    if (slot === 'armor') return ICONS.armor;
+    if (slot === 'boots') return ICONS.boot;
+    if (slot === 'ring') return ICONS.star;
+    return ICONS.gem;
+  }
+  function cubeHTML() {
+    const face = (n, cls) => '<div class="cube-face ' + cls + '">' + diePips(n) + '</div>';
+    const turn = FACE_TURN[State.dieFace] || FACE_TURN[1];
+    return '<div class="die-stage"><div class="cube" id="cube" style="transform:' + turn + '">' +
+      face(1, 'f1') + face(2, 'f2') + face(3, 'f3') + face(4, 'f4') + face(5, 'f5') + face(6, 'f6') +
+      '</div></div>';
+  }
   function tileIcon(type) {
     const map = { start: ICONS.fire, fight: ICONS.sword, elite: ICONS.crown, mini: ICONS.star, buff: ICONS.heart, hazard: ICONS.thorn, shop: ICONS.bag, boss: ICONS.flame };
     return map[type] || ICONS.star;
@@ -1173,11 +1361,11 @@
   function navHTML() {
     const points = State.save.talentPoints;
     const items = [
-      ['camp', 'Camp', ICONS.camp],
-      ['party', 'Party', ICONS.party],
-      ['gear', 'Gear', ICONS.gear],
-      ['grow', 'Grow', ICONS.grow],
+      ['camp', 'Adventure', ICONS.camp],
+      ['gear', 'Forge', ICONS.gear],
       ['chests', 'Chests', ICONS.chest],
+      ['grow', 'Talents', ICONS.grow],
+      ['party', 'Heroes', ICONS.party],
     ];
     return '<nav class="nav">' + items.map(([id, label, pic]) =>
       '<button data-act="goto" data-to="' + id + '" class="' + (State.screen === id ? 'on' : '') + '" aria-current="' + (State.screen === id ? 'page' : 'false') + '">' +
@@ -1187,11 +1375,11 @@
   function renderDock() {
     const dock = document.getElementById('dock');
     if (State.screen === 'battle') {
-      dock.innerHTML = '<button class="roll" id="speed-btn" data-act="speed" aria-label="Toggle battle speed">Speed ' + State.speed + '×</button>';
+      dock.innerHTML = '<button class="roll" id="speed-btn" data-act="speed" aria-label="Battle speed, free">Speed ' + State.speed + '×</button>';
       return;
     }
     if (State.screen === 'cards') {
-      dock.innerHTML = '<button class="roll" data-act="take-card"' + (State.pick == null ? ' disabled' : '') + '>Take boon</button>';
+      dock.innerHTML = '<button class="roll" data-act="take-card"' + (State.pick == null ? ' disabled' : '') + '>Learn skill</button>';
       return;
     }
     if (State.screen === 'victory' || State.screen === 'defeat') {
@@ -1203,16 +1391,15 @@
       const atEnd = State.run.index >= State.run.tiles.length - 1;
       const pending = (State.run.stepsLeft || 0) > 0 && tile && tile.resolved && !atEnd;
       const ready = tile && tile.resolved && !atEnd && !pending;
-      const pulse = State.save.runs === 0 && State.run.index === 0 && ready ? ' pulse' : '';
-      const label = pending ? 'Continue' : (tile && !tile.resolved ? 'Enter' : 'End of the road');
+      const label = pending ? 'WALK' : (tile && !tile.resolved ? 'LOOK' : 'END');
       const act = pending ? 'continue' : 'enter';
-      dock.innerHTML =
-        '<div class="subdock"><button data-act="ask-retire">Retire</button><button data-act="help">How to play</button></div>' +
-        '<div class="roll-row"><div class="die" id="die">' + diePips(State.dieFace) + '</div>' +
+      dock.innerHTML = '<div class="dice-dock">' +
+        '<div class="roll-pill"><b>' + (State.run.rolls || 0) + '</b><small>rolls</small></div>' +
         (ready
-          ? '<button class="roll' + pulse + '" data-act="roll">ROLL</button>'
-          : '<button class="roll" data-act="' + act + '">' + label + '</button>') +
-        '</div>';
+          ? '<button class="dice-btn' + (State.save.runs === 0 && State.run.index === 0 ? ' pulse' : '') + '" data-act="roll" aria-label="Roll the die"><span id="iso-die">' + isoDie(State.dieFace) + '</span><span>ROLL</span></button>'
+          : '<button class="dice-btn" data-act="' + act + '"><span id="iso-die">' + isoDie(State.dieFace) + '</span><span>' + label + '</span></button>') +
+        '<div class="roll-pill"><b>' + (State.run.index + 1) + '/' + State.run.tiles.length + '</b><small>path</small></div>' +
+        '</div><div class="subdock"><button data-act="ask-retire">Retire</button><button data-act="help">How to play</button></div>';
       return;
     }
     dock.innerHTML = navHTML();
@@ -1232,46 +1419,114 @@
     const bits = [['HP', prof.maxHp], ['ATK', prof.atk], ['DEF', prof.def], ['SPD', prof.spd], ['CRIT', Math.round(prof.crit * 100) + '%']];
     return '<div class="stats">' + bits.map(([name, value]) => '<div class="stat"><b>' + value + '</b><span>' + name + '</span></div>').join('') + '</div>';
   }
+  function arenaBackdrop(boss) {
+    const sky = boss ? '#ff9a4a' : '#8fd8ff';
+    const hill = boss ? '#6a4030' : '#3c8f38';
+    const floor = boss ? '#6a5348' : '#d9c4a0';
+    const floor2 = boss ? '#4e3b34' : '#c4ab84';
+    let stones = '';
+    for (let r = 0; r < 4; r += 1) {
+      for (let c = 0; c < 7; c += 1) {
+        const x = 20 + c * 48 + (r % 2) * 24;
+        const y = 196 + r * 28;
+        stones += '<polygon points="' + x + ',' + y + ' ' + (x + 28) + ',' + (y + 12) + ' ' + x + ',' + (y + 24) + ' ' + (x - 28) + ',' + (y + 12) + '" fill="' + ((c + r) % 2 ? floor : floor2) + '" stroke="#24160c" stroke-width="1.4"/>';
+      }
+    }
+    return '<svg class="backdrop" viewBox="0 0 360 340" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="360" height="340" fill="' + sky + '"/><circle cx="300" cy="48" r="26" fill="#ffe56a" stroke="#24160c" stroke-width="3"/><ellipse cx="60" cy="120" rx="28" ry="16" fill="#fff" stroke="#24160c" stroke-width="2"/><ellipse cx="78" cy="116" rx="18" ry="12" fill="#fff" stroke="#24160c" stroke-width="2"/><ellipse cx="40" cy="168" rx="100" ry="36" fill="' + hill + '"/><ellipse cx="320" cy="176" rx="90" ry="32" fill="' + hill + '"/><rect x="18" y="150" width="12" height="40" fill="#6b4428" stroke="#24160c"/><circle cx="24" cy="132" r="28" fill="#2f7d32" stroke="#24160c" stroke-width="3"/><circle cx="8" cy="146" r="16" fill="#4eaa45" stroke="#24160c" stroke-width="2"/><rect x="326" y="146" width="12" height="44" fill="#6b4428" stroke="#24160c"/><circle cx="332" cy="128" r="30" fill="#2f7d32" stroke="#24160c" stroke-width="3"/>' + stones + '</svg>';
+  }
+  function treeSvg() {
+    return '<svg viewBox="0 0 70 92" aria-hidden="true"><rect x="30" y="58" width="10" height="28" fill="#8a5a32" stroke="#24160c" stroke-width="2"/><circle cx="35" cy="40" r="26" fill="#3f9a34" stroke="#24160c" stroke-width="3"/><circle cx="22" cy="48" r="14" fill="#67c453" stroke="#24160c" stroke-width="2"/><circle cx="48" cy="46" r="12" fill="#2f7d32" stroke="#24160c" stroke-width="2"/></svg>';
+  }
   function viewCamp() {
     const save = State.save;
     const prof = profile(save, null);
     const lv = levelProgress(save.xp);
     const hero = HEROES[save.hero];
-    const pet = save.pet ? PETS[save.pet] : null;
-    const mount = save.mount ? MOUNTS[save.mount] : null;
-    const dailyReady = save.daily.last !== todayKey();
-    const gearButtons = SLOTS.map((slot) => {
+    const filter = skinFilter(save.hero);
+    const slots = SLOTS.map((slot) => {
       const gear = gearById(save.equipped[slot]);
-      return '<button class="slot" data-act="goto" data-to="gear"><small>' + slot + '</small><b>' + esc(gear ? gear.name : 'Empty') + '</b><span>' + esc(gear ? gear.rarity : 'Unequipped') + '</span></button>';
+      return '<button class="eq eq-' + slot + (gear ? ' rarity-' + gear.rarity : '') + '" data-act="goto" data-to="gear" aria-label="' + SLOT_LABEL[slot] + '">' + slotIcon(slot) + '<small>' + SLOT_LABEL[slot] + '</small></button>';
     }).join('');
-    return '<section>' +
-      '<article class="hero-card"><div class="portrait">' + sprite(save.hero) + '</div><div><p class="kicker">' + esc(hero.role) + '</p><h1>' + esc(hero.name) + '</h1><p class="lv">Level ' + lv.lvl + '</p>' +
-      '<div class="xp" role="progressbar" aria-valuenow="' + lv.rest + '" aria-valuemin="0" aria-valuemax="' + lv.need + '" aria-label="Experience"><div style="width:' + Math.round(lv.rest / lv.need * 100) + '%"></div></div>' +
-      '<p class="muted">' + save.wins + ' wins · ' + save.runs + ' runs</p></div></article>' +
-      statChips(prof) +
-      '<div class="companions"><button class="comp" data-act="goto" data-to="party"><span class="comp-art">' + (pet ? sprite(save.pet) : '<span class="empty-slot">+</span>') + '</span><span><b>' + esc(pet ? pet.name : 'No pet') + '</b><small>Pet in fights</small></span></button>' +
-      '<button class="comp" data-act="goto" data-to="party"><span class="comp-art">' + (mount ? sprite(save.mount) : '<span class="empty-slot">+</span>') + '</span><span><b>' + esc(mount ? mount.name : 'No mount') + '</b><small>Mount perk</small></span></button></div>' +
-      '<div class="stage-card"><button data-act="stage" data-dir="-1" aria-label="Lower stage"' + (save.stage <= 1 ? ' disabled' : '') + '>‹</button><div><p class="kicker">Stage ' + save.stage + '</p><h2>' + esc(roadName(save.stage)) + '</h2><p class="muted">Farthest road: stage ' + save.highestStage + '</p></div>' +
-      '<button data-act="stage" data-dir="1" aria-label="Higher stage"' + (save.stage >= save.highestStage ? ' disabled' : '') + '>›</button></div>' +
-      (save.run ? '<button class="play" data-act="resume">Resume road</button>' : '<button class="play" data-act="play">Play</button>') +
-      '<div class="gear-summary">' + gearButtons + '</div>' +
-      (dailyReady ? '<button class="daily" data-act="daily">Daily pile is ready</button>' : '<p class="daily done">Daily pile returns tomorrow.</p>') +
-      '<p class="promise">Everything in Diceborn is earned by playing. No ads, no energy, no checkout.</p>' +
-      '<button class="text-btn" data-act="help">How to play</button></section>';
+    const pet = save.pet && PETS[save.pet] ? '<button class="buddy pet" data-act="goto" data-to="party">' + sprite(save.pet) + '</button>' : '';
+    const leadMount = deployedMountIds(save).find(Boolean);
+    const mount = leadMount ? '<button class="buddy mount" data-act="goto" data-to="party">' + sprite(leadMount) + '</button>' : '';
+    const dailyReady = save.daily.last !== todayKey();
+    return '<section class="camp-world"><div class="camp-stage painted">' +
+      slots + pet + mount +
+      '<div class="hero-stand" style="' + (filter ? 'filter:' + filter : '') + '">' + sprite(save.hero) + '</div>' +
+      '<div class="nameplate"><b>' + esc(hero.name) + '</b><span>Lv ' + lv.lvl + ' · longest ' + (save.bestRolls || 0) + ' rolls</span></div></div>' +
+      '<div class="ribbon"><span>' + prof.maxHp + '<i>HP</i></span><span>' + prof.atk + '<i>ATK</i></span><span>' + prof.def + '<i>DEF</i></span><span>' + prof.spd + '<i>SPD</i></span></div>' +
+      '<div class="sign"><button data-act="stage" data-dir="-1" aria-label="Lower stage"' + (save.stage <= 1 ? ' disabled' : '') + '>‹</button><div><div class="kicker">Chapter ' + save.stage + '</div><b>' + esc(roadName(save.stage)) + '</b></div><button data-act="stage" data-dir="1" aria-label="Higher stage"' + (save.stage >= save.highestStage ? ' disabled' : '') + '>›</button></div>' +
+      (save.run ? '<button class="play" data-act="resume">RESUME</button>' : '<button class="play" data-act="play">START</button>') +
+      (dailyReady ? '<button class="gift ready" data-act="daily">Daily gift is ready</button>' : '<p class="tiny">Daily gift returns tomorrow. Nothing here costs money.</p>') +
+      '</section>';
   }
   function viewParty() {
+    const tab = State.partyTab || 'heroes';
+    const tabs = [['heroes', 'Heroes'], ['pets', 'Pets'], ['mounts', 'Mounts'], ['sentinels', 'Sentinels']].map(([id, label]) =>
+      '<button data-act="party-tab" data-to="' + id + '" class="' + (tab === id ? 'on' : '') + '">' + label + '</button>'
+    ).join('');
+    let body = '';
+    if (tab === 'heroes') body = heroesPane();
+    else if (tab === 'pets') body = petsPane();
+    else if (tab === 'mounts') body = mountsPane();
+    else body = sentinelsPane();
+    return '<section><div class="tabs">' + tabs + '</div>' + body + '</section>';
+  }
+  function heroesPane() {
     const save = State.save;
-    const heroCards = HERO_IDS.map((id) => {
-      const hero = HEROES[id];
-      const open = heroUnlocked(id);
-      const on = save.hero === id;
-      return '<button class="row' + (on ? ' on' : '') + (open ? '' : ' lock') + '" data-act="equip-hero" data-id="' + id + '"><span class="row-art">' + sprite(id) + '</span><span><b>' + esc(hero.name) + '</b><span class="muted">' + esc(open ? hero.blurb : hero.unlockText) + '</span></span><span class="pill">' + (on ? 'With you' : open ? hero.role : 'Locked') + '</span></button>';
+    const focus = State.focusHero && HEROES[State.focusHero] ? State.focusHero : save.hero;
+    const hero = HEROES[focus];
+    const open = heroUnlocked(focus);
+    const prof = profile(Object.assign({}, save, { hero: focus }), null);
+    const rank = (save.heroRank && save.heroRank[focus]) || 0;
+    const cost = Math.round(22 * Math.pow(1.45, rank));
+    const skins = (SKINS[focus] || []).map((skin) => {
+      const owned = skin.met(save);
+      const on = ((save.skin && save.skin[focus]) || 'road') === skin.id;
+      return '<button data-act="skin" data-id="' + focus + '" data-skin="' + skin.id + '"' + (owned ? '' : ' disabled') + ' class="' + (on ? 'on' : '') + '">' + esc(skin.name) + '</button>';
     }).join('');
-    const petCards = PET_IDS.map((id) => companionRow('pet', id, PETS[id], save.pet === id, petUnlocked(id))).join('');
-    const mountCards = MOUNT_IDS.map((id) => companionRow('mount', id, MOUNTS[id], save.mount === id, mountUnlocked(id))).join('');
-    return '<section><div class="panel"><h2>Heroes</h2><p class="muted">Swap who walks the road. New heroes show up as you clear stages and win runs.</p><div class="list" style="margin-top:8px">' + heroCards + '</div></div>' +
-      '<div class="panel"><h2>Pets</h2><p class="muted">A pet fights beside you. Eggs hatch for free.</p><button class="gold-btn" data-act="hatch"' + (save.eggs ? '' : ' disabled') + '>' + (save.eggs ? 'Hatch egg (' + save.eggs + ')' : 'No eggs yet') + '</button><div class="list" style="margin-top:8px">' + petCards + '</div></div>' +
-      '<div class="panel"><h2>Mounts</h2><p class="muted">Mounts stay with you and lend a perk in every fight.</p><div class="list">' + mountCards + '</div></div></section>';
+    const synergy = focus === 'fenn' ? 'With Nib: +4% crit' : focus === 'bramble' ? 'With Pebble Warden: +2 DEF' : focus === 'luma' ? 'With Wisp: stronger ultimate' : 'With Mossram: +12 HP';
+    const grid = HERO_IDS.map((id) => '<button class="' + (id === focus ? 'on' : '') + '" data-act="focus-hero" data-id="' + id + '">' + sprite(id) + '<small>' + esc(heroProgress(id)) + '</small></button>').join('');
+    return '<article class="hero-sheet painted"><div class="big" style="filter:' + skinFilter(focus) + '">' + sprite(focus) + '</div><div class="sheet-copy"><p class="kicker">' + esc(open ? hero.role : 'Locked') + '</p><h2>' + esc(hero.name) + '</h2><p class="muted">Rank ' + rank + ' · ' + esc(hero.ult) + '</p><div class="statbox"><span>HP ' + prof.maxHp + '</span><span>ATK ' + prof.atk + '</span><span>DEF ' + prof.def + '</span><span>SPD ' + prof.spd + '</span></div><p class="muted">' + esc(hero.ultDesc) + '</p><p class="muted">Synergy: ' + synergy + '</p></div></article>' +
+      '<div class="panel"><div class="tabs">' + skins + '</div><button class="gold-btn" data-act="enhance-hero" data-id="' + focus + '"' + (open ? '' : ' disabled') + '>Enhance · ' + cost + ' gold</button><button class="ghost" data-act="equip-hero" data-id="' + focus + '">' + (save.hero === focus ? 'Traveling with you' : 'Swap in') + '</button><p class="muted">' + esc(open ? hero.blurb : hero.unlockText) + '</p></div>' +
+      '<div class="panel"><h3>Roster</h3><div class="hero-grid">' + grid + '</div></div>';
+  }
+  function petsPane() {
+    const save = State.save;
+    const grid = PET_IDS.map((id) => '<button class="' + (save.pet === id ? 'on' : '') + '" data-act="equip-pet" data-id="' + id + '">' + sprite(id) + '<small>' + esc(petUnlocked(id) ? PETS[id].name : PETS[id].unlockText) + '</small></button>').join('');
+    return '<div class="habitat">' + (save.pet ? sprite(save.pet) : '<p class="tiny">No pet out</p>') + '</div><div class="panel"><button class="gold-btn" data-act="hatch"' + (save.eggs ? '' : ' disabled') + '>' + (save.eggs ? 'Hatch egg (' + save.eggs + ')' : 'Eggs come from bosses and gifts') + '</button><div class="pet-grid">' + grid + '</div></div>';
+  }
+  function mountsPane() {
+    const save = State.save;
+    const view = State.mountView || 'deploy';
+    const focus = State.focusMount && MOUNTS[State.focusMount] ? State.focusMount : (deployedMountIds(save).find(Boolean) || 'dusthare');
+    const slots = [0, 1, 2].map((i) => {
+      const id = (save.mountSlots || [])[i];
+      return '<button class="pedestal" data-act="mount-slot" data-slot="' + i + '">' + (id ? sprite(id) : '<b>+</b>') + '<small>' + (id ? esc(MOUNTS[id].name) : 'Empty') + '</small></button>';
+    }).join('');
+    const strip = MOUNT_IDS.map((id) => '<button class="' + (id === focus ? 'on' : '') + '" data-act="focus-mount" data-id="' + id + '">' + sprite(id) + '<small>' + (mountUnlocked(id) ? 'Lv ' + mountLv(id) : 'Locked') + '</small></button>').join('');
+    const cost = 20 * mountLv(focus);
+    const body = view === 'deploy'
+      ? '<div class="habitat"><div class="pedestals" style="width:100%">' + slots + '</div></div><p class="tiny">Tap a pedestal, then a mount below, to deploy. Up to three.</p>'
+      : '<div class="hero-sheet"><div class="big">' + sprite(focus) + '</div><div><h2>' + esc(MOUNTS[focus].name) + '</h2><p class="muted">' + esc(mountUnlocked(focus) ? MOUNTS[focus].blurb : MOUNTS[focus].unlockText) + '</p><button class="gold-btn" data-act="level-mount" data-id="' + focus + '"' + (mountUnlocked(focus) ? '' : ' disabled') + '>Level · ' + cost + ' gold</button></div></div>';
+    return '<div class="tabs"><button data-act="mount-view" data-to="deploy" class="' + (view === 'deploy' ? 'on' : '') + '">Deploy</button><button data-act="mount-view" data-to="collection" class="' + (view === 'collection' ? 'on' : '') + '">Collection</button></div>' + body + '<div class="panel"><div class="pet-grid">' + strip + '</div></div>';
+  }
+  function sentinelsPane() {
+    const save = State.save;
+    const pads = [0, 1, 2].map((i) => {
+      const id = (save.sentinelDeploy || [])[i];
+      const def = id && SENTINELS[id];
+      return '<button class="pedestal" data-act="clear-sentinel" data-slot="' + i + '">' + (def ? '<b>' + esc(def.name) + '</b><small>Lv ' + Math.max(1, sentinelLv(id)) + '</small>' : '<b>+</b><small>Pedestal</small>') + '</button>';
+    }).join('');
+    const list = SENTINEL_IDS.map((id) => {
+      const def = SENTINELS[id];
+      const ready = sentinelReady(id);
+      const lv = sentinelLv(id);
+      const cost = lv <= 0 ? 0 : 16 * lv;
+      return '<div class="row"><span class="row-art">' + sprite(id === 'pebble' ? 'cobble' : id === 'amber' ? 'emberkit' : 'nib') + '</span><span><b>' + esc(def.name) + '</b><span class="muted">' + esc(ready ? def.blurb : def.text) + '</span></span><button class="buy" data-act="level-sentinel" data-id="' + id + '"' + (ready ? '' : ' disabled') + '>' + (lv <= 0 ? 'Awaken' : cost + ' g') + '</button></div>';
+    }).join('');
+    return '<div class="habitat"><div class="pedestals" style="width:100%">' + pads + '</div></div><div class="panel"><p class="muted">Awaken a sentinel, then tap a pedestal and choose one. Bonuses apply at once. Gold only.</p>' + list + '<div class="tabs">' + SENTINEL_IDS.map((id) => '<button data-act="place-sentinel" data-id="' + id + '"' + (sentinelReady(id) ? '' : ' disabled') + '>Place ' + esc(SENTINELS[id].name.split(' ')[0]) + '</button>').join('') + '</div></div>';
   }
   function companionRow(kind, id, data, on, open) {
     return '<button class="row' + (on ? ' on' : '') + (open ? '' : ' lock') + '" data-act="equip-' + kind + '" data-id="' + id + '"><span class="row-art">' + sprite(id) + '</span><span><b>' + esc(data.name) + '</b><span class="muted">' + esc(open ? data.blurb : data.unlockText) + '</span></span><span class="pill">' + (on ? 'Active' : open ? 'Ready' : 'Locked') + '</span></button>';
@@ -1299,9 +1554,14 @@
       return '<button class="row rarity-' + gear.rarity + (marked ? ' on' : '') + '" data-act="item" data-id="' + gear.id + '"><span class="row-art">' + ICONS.gear + '</span><span><b>' + esc(gear.name) + '</b><span class="muted">' + esc(describeStats(gear)) + '</span></span><span class="pill tag-' + gear.rarity + '">' + gear.rarity + '</span></button>';
     }).join('') : '<p class="muted">No gear yet. Win fights, open chests, and visit peddlers.</p>';
     const ready = State.fuse.length === 3;
-    return '<section><div class="panel"><h2>Worn</h2><div class="equip-row">' + equipped + '</div>' + sets + '</div>' +
-      '<div class="panel"><h2>Fuse</h2><p class="muted">Three of the same slot and rarity become the next rarity. Common, uncommon, rare, epic, then legendary.</p><div class="fuse-tray">' + fuseCells + '</div><button class="gold-btn" data-act="fuse-go"' + (ready ? '' : ' disabled') + '>Fuse</button></div>' +
-      '<div class="panel"><h2>Pack</h2><div class="list">' + rows + '</div></div></section>';
+    const grid = sorted.length ? sorted.map((gear) => {
+      const marked = State.fuse.indexOf(gear.id) >= 0;
+      return '<button class="rarity-' + gear.rarity + (marked ? ' on' : '') + '" data-act="item" data-id="' + gear.id + '" style="background:' + (gear.rarity === 'rare' ? '#d7ecff' : gear.rarity === 'epic' ? '#f3d6ff' : gear.rarity === 'legendary' ? '#ffe7a4' : gear.rarity === 'uncommon' ? '#d9f7e2' : '#fff') + '">' + slotIcon(gear.slot) + '<small>Lv' + gear.ilevel + '</small></button>';
+    }).join('') : '<p class="muted">The racks are empty. Win fights and open chests.</p>';
+    return '<section><div class="forge-head"><div class="forge-fire"></div><div class="smith">' + sprite('bramble') + '</div><div class="bubble" style="position:absolute;left:78px;top:16px;max-width:180px">Hearth is hot. Three of a kind become the next rarity.</div></div>' +
+      '<div class="tabs"><button data-act="forge-tab" data-to="merge" class="' + ((State.forgeTab || 'merge') === 'merge' ? 'on' : '') + '">Merge</button><button data-act="forge-tab" data-to="break" class="' + (State.forgeTab === 'break' ? 'on' : '') + '">Dismantle</button></div>' +
+      '<div class="panel"><p class="muted">Power ' + Math.round(profile(save, null).atk * 10 + profile(save, null).maxHp * 0.4) + '</p><div class="equip-row">' + equipped + '</div>' + sets +
+      '<div class="fuse-tray">' + fuseCells + '</div><button class="gold-btn" data-act="fuse-go"' + (ready ? '' : ' disabled') + '>Merge selected</button><button class="ghost" data-act="quick-merge">Quick merge</button><div class="inv-grid" style="margin-top:8px">' + grid + '</div></div></section>';
   }
   function viewGrow() {
     const save = State.save;
@@ -1317,8 +1577,36 @@
       const maxed = rank >= spec.max;
       return '<div class="row"><span class="row-art">' + ICONS.star + '</span><span><b>' + spec.name + '</b><span class="muted">' + spec.detail + ' · rank ' + rank + '/' + spec.max + '</span></span><button class="buy" data-act="talent" data-id="' + spec.id + '"' + (maxed || save.talentPoints < 1 ? ' disabled' : '') + '>' + (maxed ? 'Mastered' : '1 pt') + '</button></div>';
     }).join('');
-    return '<section><div class="panel"><h2>Training yard</h2><p class="muted">Spend gold from roads, chests, and the daily pile. It stays with you forever.</p><div class="list" style="margin-top:8px">' + training + '</div></div>' +
-      '<div class="panel"><h2>Talents</h2><p class="muted">Level ' + lv.lvl + ' · ' + lv.rest + '/' + lv.need + ' xp · ' + save.talentPoints + ' point' + (save.talentPoints === 1 ? '' : 's') + '. Fights grant experience. Each level gives a point.</p><div class="list" style="margin-top:8px">' + talents + '</div></div></section>';
+    const nodes = [
+      ['hp', 50, 86], ['atk', 22, 70], ['def', 78, 70],
+      ['mend', 32, 54], ['shield', 68, 54],
+      ['spd', 18, 38], ['pet', 50, 38], ['gold', 82, 38],
+      ['mini', 34, 22], ['ult', 66, 22], ['boss', 50, 8],
+    ];
+    const links = [['hp', 'atk'], ['hp', 'def'], ['atk', 'mend'], ['def', 'shield'], ['mend', 'spd'], ['mend', 'pet'], ['shield', 'pet'], ['shield', 'gold'], ['spd', 'mini'], ['pet', 'mini'], ['pet', 'ult'], ['gold', 'ult'], ['mini', 'boss'], ['ult', 'boss']];
+    const pos = {};
+    nodes.forEach((n) => { pos[n[0]] = n; });
+    const lines = links.map(([a, b]) => '<line x1="' + pos[a][1] + '" y1="' + pos[a][2] + '" x2="' + pos[b][1] + '" y2="' + pos[b][2] + '" stroke="#ffd04a" stroke-width="1.2"/>').join('');
+    const selected = State.treeNode || 'hp';
+    const bubbles = nodes.map(([id, x, y]) => {
+      const train = TRAINING.find((item) => item.id === id);
+      const talent = TALENTS.find((item) => item.id === id);
+      const rank = train ? (save.training[id] || 0) : (save.talents[id] || 0);
+      const label = train ? train.name.split(' ')[0] : talent.name.split(' ')[0];
+      return '<button class="node' + (selected === id ? ' on' : '') + '" style="left:' + x + '%;top:' + y + '%" data-act="tree" data-id="' + id + '">' + esc(label) + '<small>' + rank + '</small></button>';
+    }).join('');
+    const specT = TRAINING.find((item) => item.id === selected);
+    const specL = TALENTS.find((item) => item.id === selected);
+    let detail = '';
+    if (specT) {
+      const rank = save.training[selected] || 0;
+      const cost = trainCost(rank);
+      detail = '<b>' + specT.name + '</b><p class="muted">' + specT.detail + ' · rank ' + rank + '. Applies the moment you pay.</p><button class="gold-btn" data-act="train" data-id="' + selected + '"' + (rank >= specT.max || save.gold < cost ? ' disabled' : '') + '>' + (rank >= specT.max ? 'Mastered' : 'Train · ' + cost + ' gold') + '</button>';
+    } else if (specL) {
+      const rank = save.talents[selected] || 0;
+      detail = '<b>' + specL.name + '</b><p class="muted">' + specL.detail + ' · rank ' + rank + '/' + specL.max + '. No wait.</p><button class="gold-btn" data-act="talent" data-id="' + selected + '"' + (rank >= specL.max || save.talentPoints < 1 ? ' disabled' : '') + '>' + (rank >= specL.max ? 'Mastered' : 'Learn · 1 point') + '</button>';
+    }
+    return '<section><div class="web"><svg class="links" viewBox="0 0 100 100" preserveAspectRatio="none">' + lines + '</svg>' + bubbles + '</div><div class="panel"><p class="muted">Level ' + lv.lvl + ' · ' + save.talentPoints + ' talent point' + (save.talentPoints === 1 ? '' : 's') + '. Gold trains the roots. Points light the stars. Instant.</p>' + detail + '</div></section>';
   }
   function viewChests() {
     const save = State.save;
@@ -1329,25 +1617,66 @@
         '<button class="gold-btn" data-act="open-chest" data-kind="' + kind + '" data-pay="key"' + (count && save.keys >= spec.keys ? '' : ' disabled') + '>Use ' + spec.keys + ' key' + (spec.keys > 1 ? 's' : '') + '</button>' +
         '<button class="ghost" data-act="open-chest" data-kind="' + kind + '" data-pay="gem"' + (count && save.gems >= spec.gems ? '' : ' disabled') + '>Use ' + spec.gems + ' gems</button></article>';
     }).join('');
-    return '<section><div class="panel"><h2>Chest corner</h2><p class="muted">Keys and gems come from roads, bonus games, and the daily pile. Nothing here costs real money.</p><p class="muted">Keys ' + save.keys + ' · Gems ' + save.gems + ' · Eggs ' + save.eggs + '</p></div>' + cards + '</section>';
+    return '<section><div class="panel" style="text-align:center"><h2>Chest hollow</h2><div style="width:120px;margin:8px auto">' + chestArt(false) + '</div><p class="muted">Keys ' + save.keys + ' · Gems ' + save.gems + ' · Eggs ' + save.eggs + '. Earned on the road. Never sold for real money.</p></div>' + cards + '</section>';
   }
   function boardGeom(count) {
-    const cols = 3;
-    const tw = 104;
-    const th = 84;
-    const gx = 14;
-    const gy = 18;
-    const positions = [];
-    for (let i = 0; i < count; i += 1) {
-      const row = Math.floor(i / cols);
-      const colIn = i % cols;
-      const col = row % 2 === 0 ? colIn : cols - 1 - colIn;
-      const x = col * (tw + gx);
-      const y = row * (th + gy);
-      positions.push({ x, y, w: tw, h: th, cx: x + tw / 2, cy: y + th / 2 });
+    const way = [[188, 448], [78, 400], [44, 312], [86, 214], [168, 142], [262, 124], [322, 196], [318, 292], [246, 358], [150, 348], [112, 268], [168, 214], [236, 196], [286, 248]];
+    const seg = [];
+    let total = 0;
+    for (let i = 1; i < way.length; i += 1) {
+      const len = Math.hypot(way[i][0] - way[i - 1][0], way[i][1] - way[i - 1][1]);
+      seg.push(len);
+      total += len;
     }
-    const rows = Math.ceil(count / cols);
-    return { positions, width: cols * tw + (cols - 1) * gx, height: rows * th + Math.max(0, rows - 1) * gy };
+    const positions = [];
+    for (let n = 0; n < count; n += 1) {
+      let dist = count === 1 ? 0 : (n / (count - 1)) * total;
+      let acc = 0;
+      let x = way[0][0];
+      let y = way[0][1];
+      for (let s = 0; s < seg.length; s += 1) {
+        if (acc + seg[s] >= dist || s === seg.length - 1) {
+          const t = seg[s] ? Math.min(1, Math.max(0, (dist - acc) / seg[s])) : 0;
+          x = way[s][0] + (way[s + 1][0] - way[s][0]) * t;
+          y = way[s][1] + (way[s + 1][1] - way[s][1]) * t;
+          break;
+        }
+        acc += seg[s];
+      }
+      positions.push({ x: x - 36, y: y - 34, w: 72, h: 68, cx: x, cy: y });
+    }
+    return { positions, width: 366, height: 530 };
+  }
+  function tileArt(tile) {
+    const known = { start: 1, fight: 1, elite: 1, buff: 1, hazard: 1, shop: 1, mini: 1, boss: 1 };
+    const type = tile && known[tile.type] ? tile.type : 'fight';
+    return '<img src="art/tile-' + type + '.png" alt="" draggable="false">';
+  }
+  function tileArtUnused(tile) {
+    const tops = { start: '#f2c56a', fight: '#d7ecb0', elite: '#f0b44a', buff: '#8fd4ff', hazard: '#d9a6f2', shop: '#f0a05a', mini: '#7dce8a', boss: '#ef6a6a' };
+    const fill = tops[tile.type] || '#efe8dc';
+    const shade = { start: '#d9a64a', fight: '#b7d48a', elite: '#d09030', buff: '#5eb0e0', hazard: '#b07ad0', shop: '#d08040', mini: '#5aaa68', boss: '#c84848' }[tile.type] || '#d9c8a4';
+    const props = {
+      start: '<rect x="22" y="14" width="20" height="5" rx="1" fill="#8a5a32" stroke="#24160c"/><path d="M32 6c3 5 7 6 5 11-5-1-9 1-5-11z" fill="#ff7a3a" stroke="#24160c" stroke-width="1.2"/><path d="M28 9c2 3 4 3 3 6-3 0-5 1-3-6z" fill="#ffe56a"/>',
+      fight: '<ellipse cx="32" cy="16" rx="9" ry="6" fill="#8be08a" stroke="#24160c" stroke-width="1.4"/><ellipse cx="32" cy="15" rx="5" ry="3" fill="#d8ffd0"/><circle cx="29" cy="15" r="1.2" fill="#16321a"/><circle cx="35" cy="15" r="1.2" fill="#16321a"/>',
+      elite: '<path d="M22 18l4-8 4 5 4-5 4 8z" fill="#ffd04a" stroke="#24160c" stroke-width="1.3"/><rect x="24" y="17" width="16" height="4" fill="#e23b4a" stroke="#24160c"/>',
+      buff: '<rect x="29" y="12" width="6" height="9" rx="1" fill="#c9843a" stroke="#24160c"/><path d="M32 5c2 3 4 3 3 6-3 0-5 1-3-6z" fill="#ffe56a" stroke="#24160c"/><circle cx="32" cy="8" r="3" fill="#fff6b0" opacity=".8"/>',
+      hazard: '<path d="M26 18c2-8 6-8 4 0" fill="none" stroke="#5a2d86" stroke-width="2"/><path d="M32 18c2-10 6-8 3 0" fill="none" stroke="#7a3aad" stroke-width="2"/><path d="M38 18c2-7 5-6 3 0" fill="none" stroke="#5a2d86" stroke-width="2"/><circle cx="30" cy="9" r="1.4" fill="#c9f27a"/><circle cx="36" cy="7" r="1.4" fill="#c9f27a"/>',
+      shop: '<path d="M22 16h20l-2 6H24z" fill="#ff5d73" stroke="#24160c"/><rect x="24" y="16" width="16" height="6" fill="#c9843a" stroke="#24160c"/><circle cx="27" cy="23" r="1.5" fill="#24160c"/><circle cx="37" cy="23" r="1.5" fill="#24160c"/>',
+      mini: '<path d="M20 18 L32 8 L44 18" fill="#ff5d73" stroke="#24160c"/><path d="M26 18 L32 12 L38 18" fill="#fff" stroke="#24160c"/><rect x="28" y="18" width="8" height="5" fill="#ffe56a" stroke="#24160c"/>',
+      boss: '<path d="M22 20 V11 H42 V20" fill="#5a3038" stroke="#24160c" stroke-width="1.6"/><path d="M30 20 V13 H34 V20" fill="#24160c"/><path d="M20 11h6l-3-4z" fill="#e23b4a" stroke="#24160c"/><path d="M38 11h6l-3-4z" fill="#e23b4a" stroke="#24160c"/>',
+    };
+    return '<svg viewBox="0 0 64 50" aria-hidden="true"><polygon points="32,2 62,16 32,30 2,16" fill="' + fill + '" stroke="#24160c" stroke-width="2.2"/><polygon points="32,8 52,16 32,24 12,16" fill="' + shade + '" opacity=".45"/><polygon points="2,16 32,30 32,42 2,28" fill="#b08a66" stroke="#24160c" stroke-width="2.2"/><polygon points="62,16 32,30 32,42 62,28" fill="#8a6848" stroke="#24160c" stroke-width="2.2"/>' + (props[tile.type] || props.fight) + '</svg>';
+  }
+  function wagonSvg() {
+    return '<svg viewBox="0 0 92 70" aria-hidden="true"><rect x="18" y="28" width="58" height="22" rx="3" fill="#c9843a" stroke="#24160c" stroke-width="2.4"/><path d="M16 30 H78 L70 16 H26 Z" fill="#ff5d73" stroke="#24160c" stroke-width="2.4"/><path d="M30 30 L34 16 H46 L42 30" fill="#fff" stroke="#24160c"/><rect x="46" y="34" width="8" height="8" fill="#7ad0ff" stroke="#24160c"/><rect x="56" y="34" width="8" height="8" fill="#ffe56a" stroke="#24160c"/><circle cx="30" cy="52" r="7" fill="#5a4030" stroke="#24160c" stroke-width="2"/><circle cx="64" cy="52" r="7" fill="#5a4030" stroke="#24160c" stroke-width="2"/><circle cx="30" cy="52" r="3" fill="#e7c48a"/><circle cx="64" cy="52" r="3" fill="#e7c48a"/></svg>';
+  }
+  function chestSvg() {
+    return '<svg viewBox="0 0 70 54" aria-hidden="true"><rect x="8" y="22" width="54" height="26" rx="4" fill="#c9843a" stroke="#24160c" stroke-width="2.4"/><path d="M8 26 H62 V18 Q35 4 8 18 Z" fill="#f0c14a" stroke="#24160c" stroke-width="2.4"/><rect x="30" y="24" width="10" height="10" rx="2" fill="#ffe56a" stroke="#24160c"/><circle cx="35" cy="29" r="1.6" fill="#24160c"/></svg>';
+  }
+  function isoDie(face) {
+    const n = face >= 1 && face <= 6 ? face : 1;
+    return '<img class="die-face" src="art/die-' + n + '.png" alt="" width="104" height="104" draggable="false">';
   }
   function tileLabel(tile) {
     if (tile.type === 'start') return 'Camp';
@@ -1366,41 +1695,53 @@
     const path = geom.positions.map((pos, index) => (index ? 'L' : 'M') + pos.cx + ' ' + pos.cy).join(' ');
     const tiles = run.tiles.map((tile, index) => {
       const pos = geom.positions[index];
-      const cls = 'tile ' + tile.type + (tile.resolved ? ' done' : '') + (index === run.index ? ' current' : '');
-      return '<div class="' + cls + '" style="left:' + pos.x + 'px;top:' + pos.y + 'px;width:' + pos.w + 'px;height:' + pos.h + 'px">' + tileIcon(tile.type) + '<span>' + esc(tileLabel(tile)) + '</span></div>';
+      const cls = 'tile ' + tile.type + (tile.resolved ? ' done' : '') + (index === run.index ? ' current' : '') + (index > run.index ? ' ahead' : '');
+      return '<div class="' + cls + '" style="left:' + pos.x + 'px;top:' + pos.y + 'px;width:' + pos.w + 'px;height:' + pos.h + 'px">' + tileArt(tile) + '</div>';
     }).join('');
     const token = geom.positions[run.index];
-    const relicPills = run.relics.map((id) => {
-      const relic = RELICS.find((item) => item.id === id);
-      return '<span>' + esc(relic ? relic.name : id) + '</span>';
-    }).join('');
-    const hpPct = Math.max(0, Math.min(100, run.hp / prof.maxHp * 100));
     const tile = currentTile();
-    const stepsNote = run.stepsLeft > 0 ? ' ' + run.stepsLeft + ' step' + (run.stepsLeft === 1 ? '' : 's') + ' left this roll.' : '';
-    const blurb = (!tile ? '' : tile.type === 'start' ? 'The campfire snaps. Roll when you are ready.' : tile.resolved ? 'That tile is quiet. Roll onward.' : tile.foe ? tile.foe.name + ' is waiting.' : tile.type === 'shop' ? 'A peddler spreads a cloth.' : tile.type === 'buff' ? 'A shrine hums.' : tile.type === 'hazard' ? 'The road snags. You choose how.' : 'A free bonus game sparkles.') + stepsNote;
-    return '<section class="run-hud"><p class="kicker">Stage ' + run.stage + '</p><h2>' + esc(roadName(run.stage)) + '</h2>' +
+    const hpPct = Math.max(0, Math.min(100, run.hp / prof.maxHp * 100));
+    const blurb = !tile ? '' : tile.type === 'start' ? 'Campfire. Roll when you are ready.' : hiddenName(tile);
+    return '<section class="run-hud"><div class="hud-row"><span>' + esc(roadName(run.stage)) + '</span><span>HP ' + Math.round(run.hp) + '/' + prof.maxHp + '</span></div>' +
       '<div class="bar" role="progressbar" aria-label="Health" aria-valuenow="' + Math.round(run.hp) + '" aria-valuemax="' + prof.maxHp + '"><div style="width:' + hpPct + '%"></div></div>' +
-      '<div class="hud-row"><span>HP ' + Math.round(run.hp) + '/' + prof.maxHp + '</span><span>ATK ' + prof.atk + ' · DEF ' + prof.def + '</span></div>' +
-      '<p class="muted">' + esc(blurb) + '</p>' +
-      (relicPills || run.boons.length ? '<div class="pills">' + relicPills + (run.boons.length ? '<span>' + run.boons.length + ' boons</span>' : '') + '</div>' : '') +
-      '<div class="board-scroll"><div class="board" style="width:' + geom.width + 'px;height:' + (geom.height + 8) + 'px">' +
-      '<svg class="paths" viewBox="0 0 ' + geom.width + ' ' + geom.height + '" width="' + geom.width + '" height="' + geom.height + '"><path d="' + path + '" fill="none" stroke="rgba(240,193,74,.45)" stroke-width="4" stroke-dasharray="7 8"/></svg>' +
-      tiles + '<div class="token" id="token" style="left:' + token.cx + 'px;top:' + token.cy + 'px">' + sprite(run.heroId) + '</div></div></div></section>';
+      '<p class="now-line">' + esc(blurb) + (run.stepsLeft ? ' · ' + run.stepsLeft + ' steps left' : '') + '</p>' +
+      '<div class="world painted" style="width:' + geom.width + 'px;height:' + geom.height + 'px">' +
+      '<img class="world-bg" src="art/board.jpg" alt="">' +
+      '<img class="oak l" src="art/tree.png" alt=""><img class="oak r" src="art/tree.png" alt="">' +
+      '<img class="wagon" src="art/wagon.png" alt=""><img class="treasure" src="art/chest.png" alt="">' +
+      tiles + '<div class="token" id="token" style="left:' + token.cx + 'px;top:' + token.cy + 'px">' + sprite(run.heroId) + '</div></div></section>';
+  }
+  function hiddenName(tile) {
+    if (tile.foe) return tile.foe.name + ' waits on this stone.';
+    if (tile.type === 'shop') return 'A cart of wares.';
+    if (tile.type === 'buff') return 'A lantern shrine.';
+    if (tile.type === 'hazard') return 'Briars across the path.';
+    if (tile.type === 'mini') return (MINI_NAME[tile.game] || 'A bonus tent') + '. Free to play.';
+    if (tile.type === 'boss') return 'The gate at the end.';
+    return 'The path is quiet.';
   }
   function viewBattle() {
     const battle = State.battle;
     if (!battle) return '';
     const hero = battle.hero;
     const foe = battle.foe;
-    const pet = State.run && State.run.petId && hero.petMul ? sprite(State.run.petId) : '';
-    return '<section><div class="battle-head"><div><p class="kicker">' + (foe.boss ? 'Boss' : foe.elite ? 'Elite' : 'Fight') + '</p><h2>' + esc(foe.name) + '</h2></div></div>' +
-      '<div class="hp-grid"><div class="hp-col"><div class="who">' + esc(hero.name) + '</div><div class="bar"><div id="hp-hero" style="width:' + (hero.hp / hero.maxHp * 100) + '%"></div></div><div class="hp-num" id="hp-hero-num">' + Math.max(0, Math.ceil(hero.hp)) + '/' + hero.maxHp + (hero.shield ? ' · shield ' + Math.ceil(hero.shield) : '') + '</div></div>' +
-      '<div class="hp-col foe"><div class="who">' + esc(foe.name) + '</div><div class="bar"><div id="hp-foe" style="width:' + (foe.hp / foe.maxHp * 100) + '%"></div></div><div class="hp-num" id="hp-foe-num">' + Math.max(0, Math.ceil(foe.hp)) + '/' + foe.maxHp + '</div></div></div>' +
-      '<div class="arena"><div class="actor hero" id="actor-hero">' + sprite(hero.heroId) + '</div>' +
-      (pet ? '<div class="actor pet" id="actor-pet">' + pet + '</div>' : '') +
+    const run = State.run;
+    const pals = [];
+    if (run && run.petId && hero.petMul) pals.push('<div class="actor pet" id="actor-pet">' + sprite(run.petId) + '</div>');
+    (State.save.sentinelDeploy || []).forEach((id, index) => {
+      if (id && sentinelReady(id)) pals.push('<div class="actor pet" style="left:' + (70 + index * 36) + 'px;width:48px;height:56px">' + sprite(id === 'pebble' ? 'cobble' : id === 'amber' ? 'emberkit' : 'nib') + '</div>');
+    });
+    const boons = (run && run.boons ? run.boons : []).slice(0, 4).map((boon) => '<div class="skill ' + boon.rarity + '" title="' + esc(boon.name) + '">' + boonIcon(boon) + '</div>').join('');
+    return '<section class="battle"><div class="arena' + (foe.boss ? ' boss' : '') + '">' +
+      '<div class="plate hero"><div class="who">' + esc(hero.name) + '</div><div class="bar"><div id="hp-hero" style="width:' + (hero.hp / hero.maxHp * 100) + '%"></div></div><div class="hp-num" id="hp-hero-num">' + Math.max(0, Math.ceil(hero.hp)) + '/' + hero.maxHp + '</div></div>' +
+      '<div class="plate foe"><div class="who">' + esc(foe.name) + '</div><div class="bar"><div id="hp-foe" style="width:' + (foe.hp / foe.maxHp * 100) + '%"></div></div><div class="hp-num" id="hp-foe-num">' + Math.max(0, Math.ceil(foe.hp)) + '/' + foe.maxHp + '</div></div>' +
+      '<div class="fx-slash" id="fx-slash"></div><div class="fx-hit" id="fx-hit"></div>' +
+      '<div class="actor hero" id="actor-hero">' + sprite(hero.heroId) + '</div>' + pals.join('') +
       '<div class="actor foe" id="actor-foe">' + sprite(foe.kind) + '</div></div>' +
+      '<p class="now-line" id="pass-num">Pass ' + (battle.swings || 1) + '</p>' +
       '<div class="ult-wrap"><div class="who"><span>' + esc(hero.ultName) + '</span><span id="ult-num">' + Math.floor(hero.ult) + '%</span></div><div class="bar ult"><div id="ult-bar" style="width:' + hero.ult + '%"></div></div></div>' +
-      '<p class="log" id="battle-log">' + esc(battle.log) + '</p><button class="text-btn" data-act="flee">Flee to camp</button></section>';
+      '<div class="skills"><div class="skill">' + ICONS.sword + '</div><div class="skill">' + ICONS.flame + '<i id="ult-fill" style="width:' + hero.ult + '%"></i></div>' + boons + '</div>' +
+      '<p class="log" id="battle-log">' + esc(battle.log) + '</p><button class="flee" data-act="flee">Flee</button></section>';
   }
   function updateBattleDom() {
     const battle = State.battle;
@@ -1415,17 +1756,22 @@
     document.getElementById('hp-foe-num').textContent = Math.max(0, Math.ceil(foe.hp)) + '/' + foe.maxHp;
     document.getElementById('ult-bar').style.width = hero.ult + '%';
     document.getElementById('ult-num').textContent = Math.floor(hero.ult) + '%';
+    const fill = document.getElementById('ult-fill');
+    if (fill) fill.style.width = hero.ult + '%';
+    const pass = document.getElementById('pass-num');
+    if (pass) pass.textContent = 'Pass ' + (battle.swings || 1);
     document.getElementById('battle-log').textContent = battle.log;
   }
   function viewCards() {
     const run = State.run;
     if (!run || !run.pendingCards) return '<p class="muted">The road is quiet.</p>';
     const cards = run.pendingCards.map((card, index) =>
-      '<button class="boon ' + card.rarity + (State.pick === index ? ' picked' : '') + '" data-act="pick-card" data-i="' + index + '"><span class="pill tag-' + card.rarity + '">' + card.rarity + '</span><h3>' + esc(card.name) + '</h3><p class="muted">' + esc(card.desc) + '</p></button>'
+      '<button class="boon ' + card.rarity + (State.pick === index ? ' picked' : '') + '" data-act="pick-card" data-i="' + index + '"><span class="skill-ico">' + skillBadge(card) + '</span><span><span class="pill">' + card.rarity + '</span><h3>' + esc(card.name) + '</h3><p class="muted">' + esc(card.desc) + '</p></span></button>'
     ).join('');
-    return '<section><p class="kicker">Victory</p><h2>Pick one boon</h2><p class="muted">The other two fade. This lasts for the rest of the road.</p>' +
+    const reroll = run.freeReroll ? 'Reroll · free' : 'Reroll · 10 gold';
+    return '<section class="pick-scene"><img class="pick-bg" src="art/board.jpg" alt=""><div class="pick"><div class="banner-flag">POWER UP!</div><p class="lead">Pick one skill to learn.</p>' +
       (run.banner ? '<p class="banner">' + esc(run.banner) + '</p>' : '') +
-      '<div class="boons">' + cards + '</div></section>';
+      '<div class="boons">' + cards + '</div><button class="ghost reroll" data-act="reroll-cards">' + reroll + '</button></div></section>';
   }
   function viewEnd() {
     const result = State.result || { won: false, lines: [], unlocks: [], hero: 'Fenn', foe: 'the road', road: '', found: 0, stage: 1 };
@@ -1484,12 +1830,9 @@
   }
   function helpHTML() {
     return '<div class="help"><h2>How to play</h2>' +
-      '<h3>Roll</h3><p>Tap ROLL. The die hops, then your hero steps that many tiles. Each tile wakes up before the next step.</p>' +
-      '<h3>Tiles</h3><p>Fights play themselves. Shrines, snags, peddlers, and bonus games sit between them. A boss waits at the end.</p>' +
-      '<h3>Fights</h3><p>Health, attack, defense, and speed all matter. Your hero strikes on a timer and charges an ultimate. After a win, pick 1 of 3 boons. If you fall, the run ends and gold already pocketed stays.</p>' +
-      '<h3>Bonus games</h3><p>Spin a wheel, call higher or lower, pick a chest, flip whisker cards, or yank the slots. They are free. Always.</p>' +
-      '<h3>Camp</h3><p>Train with gold. Spend talent points earned from experience. Fuse three pieces of the same rarity into the next. Hatch eggs, open chests, claim the daily pile. Heroes, pets, and mounts unlock by playing.</p>' +
-      '<h3>No checkout</h3><p>Diceborn has no ads, no energy, and nothing to buy with real money.</p>' +
+      '<p>Roll the big die. Fenn walks each stone. Fights play themselves. After a win, learn one skill.</p>' +
+      '<p>Shrines, snags, Nim’s cart, and free carnival games sit on the path. A boss waits at the end.</p>' +
+      '<p>Gold stays if you fall. Spend it in camp. No ads, no energy, nothing to buy with real money.</p>' +
       '<button class="gold-btn" data-act="close">Let\'s roll</button></div>';
   }
   function predictedStreak() {
@@ -1559,7 +1902,7 @@
       const poor = State.save.gold < item.cost;
       return '<button class="choice" data-act="buy" data-i="' + index + '"' + (item.sold || owned || poor ? ' disabled' : '') + '><b>' + esc(item.label) + ' · ' + item.cost + 'g</b><span>' + esc(item.desc) + (item.sold ? ' · sold' : owned ? ' · already carried' : poor ? ' · need more gold' : '') + '</span></button>';
     }).join('');
-    return '<h2>Peddler</h2><p class="muted">Spend gold from your camp purse. What you buy stays, even if the road ends.</p>' + rows + '<button class="text-btn" data-act="resolve">Leave</button>';
+    return '<div class="merchant-row"><div>' + sprite('bramble') + '</div><div class="bubble"><b>Nim the otter</b><p class="muted">Gold from the road only. Nothing here is for sale with real money.</p></div></div>' + rows + '<button class="ghost" data-act="reroll-shop">Reroll wares · 8 gold</button><button class="gold-btn" data-act="resolve">Exit</button>';
   }
   function miniHTML() {
     const tile = currentTile();
@@ -2061,10 +2404,10 @@
   }
   function paintDie(face, rolling) {
     State.dieFace = face;
-    const die = document.getElementById('die');
-    if (!die) return;
-    die.classList.toggle('rolling', !!rolling);
-    die.innerHTML = diePips(face);
+    const holder = document.getElementById('iso-die');
+    if (!holder) return;
+    holder.classList.toggle('tumbling', !!rolling);
+    holder.innerHTML = isoDie(face);
   }
   function paintToken() {
     if (!State.run) return;
@@ -2091,7 +2434,7 @@
     ensureAudio();
     State.busy = true;
     const button = document.querySelector('[data-act="roll"]');
-    if (button) { button.disabled = true; button.textContent = '…'; }
+    if (button) button.disabled = true;
     const cap = State.run.rollCap || 6;
     State.run.rollCap = 0;
     const face = 1 + rngInt(cap);
@@ -2103,6 +2446,7 @@
     }
     paintDie(face, false);
     blip(520, 0.1, 'triangle', 0.05);
+    State.run.rolls = (State.run.rolls || 0) + 1;
     State.run.stepsLeft = face;
     State.busy = false;
     await advanceSteps();
@@ -2143,7 +2487,7 @@
     State.save.run = State.run;
     State.screen = 'board';
     State.overlay = null;
-    State.dieFace = 1;
+    State.dieFace = 5;
     saveGame();
     render();
   }
@@ -2161,6 +2505,46 @@
       renderTop();
       return;
     }
+    if (act === 'party-tab') { State.partyTab = el.dataset.to; render(); return; }
+    if (act === 'mount-view') { State.mountView = el.dataset.to; render(); return; }
+    if (act === 'forge-tab') { State.forgeTab = el.dataset.to; render(); return; }
+    if (act === 'tree') { State.treeNode = el.dataset.id; render(); return; }
+    if (act === 'focus-hero') { State.focusHero = el.dataset.id; render(); return; }
+    if (act === 'focus-mount') {
+      State.focusMount = el.dataset.id;
+      if (State.mountView !== 'collection' && State.mountPick != null && mountUnlocked(el.dataset.id)) {
+        const slots = State.save.mountSlots;
+        const prev = slots.indexOf(el.dataset.id);
+        if (prev >= 0) slots[prev] = null;
+        slots[State.mountPick] = el.dataset.id;
+        State.save.mount = slots[0] || null;
+      }
+      saveGame();
+      render();
+      return;
+    }
+    if (act === 'mount-slot') { State.mountPick = Number(el.dataset.slot); toast('Now pick a mount.'); return; }
+    if (act === 'level-mount') { levelMount(el.dataset.id); return; }
+    if (act === 'level-sentinel') { levelSentinel(el.dataset.id); return; }
+    if (act === 'place-sentinel') { placeSentinel(el.dataset.id); return; }
+    if (act === 'clear-sentinel') {
+      State.save.sentinelDeploy[Number(el.dataset.slot)] = null;
+      saveGame();
+      render();
+      return;
+    }
+    if (act === 'enhance-hero') { enhanceHero(el.dataset.id); return; }
+    if (act === 'skin') {
+      const skin = (SKINS[el.dataset.id] || []).find((item) => item.id === el.dataset.skin);
+      if (!skin || !skin.met(State.save)) return;
+      State.save.skin[el.dataset.id] = skin.id;
+      saveGame();
+      render();
+      return;
+    }
+    if (act === 'quick-merge') { quickMerge(); return; }
+    if (act === 'reroll-cards') { rerollCards(); return; }
+    if (act === 'reroll-shop') { rerollShop(); return; }
     if (act === 'goto') {
       State.screen = el.dataset.to;
       State.overlay = null;
@@ -2198,7 +2582,8 @@
       return;
     }
     if (act === 'speed') {
-      State.speed = State.speed === 1 ? 2 : 1;
+      const speeds = [1, 2, 4];
+      State.speed = speeds[(speeds.indexOf(State.speed) + 1) % speeds.length];
       if (State.battle) State.battle.speed = State.speed;
       const button = document.getElementById('speed-btn');
       if (button) button.textContent = 'Speed ' + State.speed + '×';
@@ -2244,6 +2629,13 @@
     if (act === 'open-chest') { openChest(el.dataset.kind, el.dataset.pay); return; }
     if (act === 'item') {
       if (!el.dataset.id) { State.screen = 'gear'; render(); return; }
+      if (State.forgeTab === 'break') {
+        const broken = gearById(el.dataset.id);
+        if (!broken) return;
+        State.overlay = { type: 'confirm', text: 'Dismantle ' + broken.name + ' for ' + SALVAGE_GOLD[broken.rarity] + ' gold?', act: 'salvage-yes', id: broken.id };
+        render();
+        return;
+      }
       State.overlay = { type: 'item', id: el.dataset.id };
       render();
       return;
@@ -2295,6 +2687,89 @@
       resolveTile();
     }
   }
+  function levelSentinel(id) {
+    if (!sentinelReady(id)) return;
+    const lv = sentinelLv(id);
+    if (lv <= 0) {
+      State.save.sentinelLevel[id] = 1;
+      const empty = State.save.sentinelDeploy.indexOf(null);
+      if (empty >= 0 && State.save.sentinelDeploy.indexOf(id) < 0) State.save.sentinelDeploy[empty] = id;
+    } else {
+      const cost = 16 * lv;
+      if (State.save.gold < cost) { toast('Not enough gold.'); return; }
+      spendGold(cost);
+      State.save.sentinelLevel[id] = lv + 1;
+    }
+    saveGame();
+    render();
+  }
+  function placeSentinel(id) {
+    if (!sentinelReady(id) || sentinelLv(id) <= 0) { toast('Awaken them first.'); return; }
+    const slots = State.save.sentinelDeploy;
+    const have = slots.indexOf(id);
+    if (have >= 0) slots[have] = null;
+    let slot = slots.indexOf(null);
+    if (slot < 0) slot = 0;
+    slots[slot] = id;
+    saveGame();
+    render();
+  }
+  function levelMount(id) {
+    if (!mountUnlocked(id)) return;
+    const lv = mountLv(id);
+    const cost = 20 * lv;
+    if (State.save.gold < cost) { toast('Not enough gold.'); return; }
+    spendGold(cost);
+    State.save.mountLevel[id] = lv + 1;
+    saveGame();
+    render();
+  }
+  function enhanceHero(id) {
+    if (!heroUnlocked(id)) { toast(HEROES[id].unlockText); return; }
+    const rank = (State.save.heroRank[id] || 0);
+    const cost = Math.round(22 * Math.pow(1.45, rank));
+    if (State.save.gold < cost) { toast('Not enough gold.'); return; }
+    spendGold(cost);
+    State.save.heroRank[id] = rank + 1;
+    saveGame();
+    render();
+  }
+  function quickMerge() {
+    const groups = {};
+    State.save.gear.forEach((gear) => {
+      if (gear.rarity === 'legendary') return;
+      const key = gear.slot + '|' + gear.rarity;
+      groups[key] = groups[key] || [];
+      groups[key].push(gear.id);
+    });
+    const hit = Object.keys(groups).map((key) => groups[key]).find((ids) => ids.length >= 3);
+    if (!hit) { toast('No three of a kind yet.'); return; }
+    State.fuse = hit.slice(0, 3);
+    fuseSelected();
+  }
+  function rerollCards() {
+    const run = State.run;
+    if (!run || !run.pendingCards) return;
+    if (!run.freeReroll) {
+      if (State.save.gold < 10) { toast('Need 10 gold.'); return; }
+      spendGold(10);
+    }
+    run.freeReroll = false;
+    run.pendingCards = draftCards(!!run.pendingElite);
+    State.pick = null;
+    saveGame();
+    render();
+  }
+  function rerollShop() {
+    const tile = currentTile();
+    if (!tile || tile.type !== 'shop') return;
+    if (State.save.gold < 8) { toast('Need 8 gold.'); return; }
+    spendGold(8);
+    tile.stock = rollShop(State.rng, State.run.stage);
+    State.run.rngState = State.rng.state();
+    saveGame();
+    render();
+  }
   function buyTraining(id) {
     const spec = TRAINING.find((item) => item.id === id);
     const rank = State.save.training[id] || 0;
@@ -2337,9 +2812,8 @@
         }
       } else State.save.run = null;
     }
-    if (State.screen === 'camp') {
-      if (!State.save.seenHelp) State.overlay = { type: 'help' };
-      else if (State.save.daily.last !== todayKey()) State.overlay = { type: 'daily' };
+    if (State.screen === 'camp' && State.save.daily.last !== todayKey() && State.save.runs > 0 && !State.overlay) {
+      State.overlay = { type: 'daily' };
     }
     document.body.addEventListener('click', onClick);
     document.body.addEventListener('keydown', onKey);
