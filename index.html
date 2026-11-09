@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#140c22" />
+  <meta name="description" content="Diceborn is a free dice-board adventure about a fox-eared wanderer. No ads, no energy, no purchases." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Diceborn</title>
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="game.css" />
+</head>
+<body>
+  <div id="sky" aria-hidden="true"></div>
+  <div id="frame">
+    <header id="top"></header>
+    <main id="view"></main>
+    <div id="dock"></div>
+    <footer>Diceborn v1</footer>
+    <div id="overlay" hidden></div>
+  </div>
+  <div id="toasts" aria-live="polite"></div>
+  <noscript><p class="noscript">Diceborn needs JavaScript. The whole game stays on your device.</p></noscript>
+  <script src="game.js"></script>
+</body>
+</html>
